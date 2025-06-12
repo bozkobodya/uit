@@ -1,10 +1,15 @@
-name: Build EXE with PyInstaller
+name: Build and Test Morse Code Converter
 
-on: [push]
+on:
+  push:
+    branches: [ main, develop, master ]
+  pull_request:
+    branches: [ main, master ]
 
 jobs:
-  build:
-    runs-on: windows-latest
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
     
     steps:
       - name: Checkout repository
@@ -18,22 +23,209 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller
-          pip install pillow
-          # Додайте інші залежності вашого проекту
-          # pip install -r requirements.txt
+          pip install coverage pytest pytest-html pytest-cov
+          # Якщо є requirements.txt
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           
-      - name: Run tests (optional)
+      - name: Run unit tests with coverage
         run: |
-          python -m unittest discover -s . -p "test*.py" || true
+          python -m pytest test_morse_converter.py -v --html=pytest_report.html --self-contained-html --cov=morse_converter --cov-report=xml --cov-report=html --cov-report=term
+        continue-on-error: false
+        
+      - name: Run tests with unittest (backup)
+        if: failure()
+        run: |
+          python -m unittest test_morse_converter.py -v
+          
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: |
+            pytest_report.html
+            htmlcov/
+            coverage.xml
+          retention-days: 30
+          
+      - name: Upload coverage to Codecov (optional)
+        uses: codecov/codecov-action@v3
+        if: success()
+        with:
+          file: ./coverage.xml
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+
+  build-windows:
+    name: Build Windows EXE
+    needs: test
+    runs-on: windows-latest
+    if: success()
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller pillow
+          if (Test-Path requirements.txt) { pip install -r requirements.txt }
+          
+      - name: Verify main script exists
+        run: |
+          if (-Not (Test-Path "morse_converter.py")) {
+            Write-Error "morse_converter.py not found!"
+            exit 1
+          }
           
       - name: Build EXE with PyInstaller
         run: |
-          pyinstaller --onefile --windowed lab1.py
-          # Або з іконкою: pyinstaller --onefile --windowed --icon=icon.ico run.py
+          pyinstaller --onefile --windowed --name="MorseCodeConverter" morse_converter.py
+          # Або з іконкою якщо є:
+          # pyinstaller --onefile --windowed --icon=icon.ico --name="MorseCodeConverter" morse_converter.py
           
-      - name: Upload EXE Artifact
+      - name: Test EXE file creation
+        run: |
+          if (-Not (Test-Path "dist/MorseCodeConverter.exe")) {
+            Write-Error "EXE file was not created!"
+            exit 1
+          }
+          Write-Host "EXE file created successfully"
+          Get-Item "dist/MorseCodeConverter.exe" | Select-Object Name, Length, LastWriteTime
+          
+      - name: Upload Windows EXE
         uses: actions/upload-artifact@v4
         with:
-          name: Morse-Code-Translator-${{ github.sha }}
-          path: dist/lab1.exe
+          name: MorseCodeConverter-Windows-${{ github.sha }}
+          path: dist/MorseCodeConverter.exe
+          retention-days: 90
+
+  build-cross-platform:
+    name: Build for Multiple Platforms
+    needs: test
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.10"]
+    runs-on: ${{ matrix.os }}
+    if: success()
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          
+      - name: Build executable
+        run: |
+          pyinstaller --onefile --name="MorseCodeConverter" morse_converter.py
+          
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: MorseCodeConverter-${{ matrix.os }}-${{ github.sha }}
+          path: dist/MorseCodeConverter*
+          retention-days: 30
+
+  create-release:
+    name: Create Release
+    needs: [test, build-windows, build-cross-platform]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && success()
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+          
+      - name: Display structure of downloaded files
+        run: ls -la ./artifacts
+        
+      - name: Get current date
+        id: date
+        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+        
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ github.run_number }}-${{ steps.date.outputs.date }}
+          release_name: Morse Code Converter v${{ github.run_number }}
+          body: |
+            ## Morse Code Converter Release
+            
+            ### Changes in this release:
+            - Automated build from commit: ${{ github.sha }}
+            - All tests passed ✅
+            - Cross-platform builds included
+            
+            ### Downloads:
+            - **Windows**: MorseCodeConverter.exe
+            - **Linux/Mac**: Available in artifacts
+            
+            ### Installation:
+            1. Download the appropriate file for your OS
+            2. Run the executable
+            3. No additional installation required!
+            
+            Built on: ${{ steps.date.outputs.date }}
+          draft: false
+          prerelease: false
+          
+      - name: Upload Windows Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./artifacts/MorseCodeConverter-Windows-${{ github.sha }}/MorseCodeConverter.exe
+          asset_name: MorseCodeConverter-Windows.exe
+          asset_content_type: application/octet-stream
+
+  notify-status:
+    name: Notify Build Status
+    needs: [test, build-windows]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: Notify Success
+        if: needs.test.result == 'success' && needs.build-windows.result == 'success'
+        run: |
+          echo "✅ Build completed successfully!"
+          echo "✅ All tests passed"
+          echo "✅ Windows EXE created"
+          
+      - name: Notify Failure
+        if: needs.test.result == 'failure' || needs.build-windows.result == 'failure'
+        run: |
+          echo "❌ Build failed!"
+          if [ "${{ needs.test.result }}" == "failure" ]; then
+            echo "❌ Tests failed"
+          fi
+          if [ "${{ needs.build-windows.result }}" == "failure" ]; then
+            echo "❌ Windows build failed"
+          fi
+          exit 1
