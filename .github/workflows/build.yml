@@ -29,7 +29,7 @@ jobs:
           
       - name: Run unit tests with coverage
         run: |
-          python -m pytest lab1.py -v --html=pytest_report.html --self-contained-html --cov=morse_converter --cov-report=xml --cov-report=html --cov-report=term
+          python -m pytest lab1.py -v --html=pytest_report.html --self-contained-html --cov=lab1 --cov-report=xml --cov-report=html --cov-report=term
         continue-on-error: false
         
       - name: Run tests with unittest (backup)
@@ -80,16 +80,16 @@ jobs:
           
       - name: Verify main script exists
         run: |
-          if (-Not (Test-Path "morse_converter.py")) {
-            Write-Error "morse_converter.py not found!"
+          if (-Not (Test-Path "lab1.py")) {
+            Write-Error "lab1.py not found!"
             exit 1
           }
           
       - name: Build EXE with PyInstaller
         run: |
-          pyinstaller --onefile --windowed --name="MorseCodeConverter" morse_converter.py
+          pyinstaller --onefile --windowed --name="MorseCodeConverter" lab1.py
           # Або з іконкою якщо є:
-          # pyinstaller --onefile --windowed --icon=icon.ico --name="MorseCodeConverter" morse_converter.py
+          # pyinstaller --onefile --windowed --icon=icon.ico --name="MorseCodeConverter" lab1.py
           
       - name: Test EXE file creation
         run: |
@@ -134,7 +134,7 @@ jobs:
           
       - name: Build executable
         run: |
-          pyinstaller --onefile --name="MorseCodeConverter" morse_converter.py
+          pyinstaller --onefile --name="MorseCodeConverter" lab1.py
           
       - name: Upload executable
         uses: actions/upload-artifact@v4
